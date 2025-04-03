@@ -1,5 +1,6 @@
 import os
 import tqdm
+import argparse
 from utils import load_config
 
 import pandas as pd
@@ -7,6 +8,8 @@ import geopandas as gpd
 from src.utils.data_loader import (
     load_station_info,
     load_hydro_data,
+    load_water_flows,
+    load_meteo_data,
     read_soil_data,
 )   
 
@@ -23,15 +26,12 @@ def get_stations_list(area, data_dir, crs = 'epsg:4326'):
     
     return stations_eval
     
-def get_hydro_data(area, data_dir, mini_data_dir = None, crs = 'epsg:4326'):
+def get_hydro_data(area, data_dir, sec_data_dir, crs = 'epsg:4326'):
     # load the data
     hydro_data = load_hydro_data(area, data_dir)
     
     # load stations list
-    if mini_data_dir is not None:
-        stations = get_stations_list(area, mini_data_dir, crs = crs)
-    else:
-        stations = get_stations_list(area, data_dir, crs = crs)
+    stations = get_stations_list(area, sec_data_dir, crs = crs)
 
     # reproject hydro data to same crs as stations
     for geo_scale in hydro_data.keys():
@@ -77,9 +77,100 @@ def get_join_info(area):
     else:
         raise ValueError('area must be one of brazil or france')
     return join_info
+
+def get_water_flow_data(area, data_dir):
+    print(f'Loading water flow data for {area}')
+    train_water_flow = load_water_flows(area, 'train', data_dir)
+    eval_water_flow = load_water_flows(area, 'eval', data_dir)
+    return {'train' : train_water_flow, 'eval' : eval_water_flow}
+
+def aggregate_meteo_data(data, stations_gdf, max_date, buffer_scales = None, crs = 'epsg:4326'):
+    # get buffer scales
+    if buffer_scales is None:
+        buffer_scales = [50, 100]
+        
+    # define output df
+    df = None
+
+    # establish key variables
+    key_vars = {
+        'precipitations' : 'tp', 
+        'temperatures' : 't2m',
+        'soil_moisture' : 'swvl1',
+        'evaporation' : 'e'
+    }
+
+    # loop through and aggregate at different scales for the four variables
+    # loop 1 - variable loop
+    for key, var in key_vars.items():
+        keys_list = []
+        data_var = data[key][var]  # extract variable
+        data_var = data_var.rio.write_crs(crs) #project to crs
+        # loop 2 - stations loop
+        for idx, row in stations_gdf.iterrows():
+            lat, lon = row.geometry.y, row.geometry.x
+            # sample a single point (each point is sampled at 0.25 degrees approximately at 27km)
+            sampled_values = data_var.sel(latitude=lat, longitude=lon, method="nearest").to_dataframe().reset_index()
+            # Filter by date range
+            sampled_values = sampled_values[sampled_values.valid_time <= max_date]
+            sampled_values["station_code"] = row.station_code
+            sampled_values = sampled_values[['station_code', 'valid_time', var]]
+            # loop 3 - sample at different buffer scales
+            for buffer in buffer_scales:
+                # select data within buffer
+                geom = row.geometry.buffer(buffer / 111) # convert kilometer to degrees
+                clipped_data = data_var.rio.clip([geom])
+                buffer_values = clipped_data.mean(dim = ['latitude', 'longitude'])
+                buffer_values = buffer_values.to_dataframe().reset_index()
+                buffer_values = buffer_values[buffer_values.valid_time <= max_date]
+                buffer_values['station_code'] = buffer_values["station_code"] = row.station_code
+                buffer_values = buffer_values.rename(columns={var: f'{var}_{buffer}km'})
     
-def aggregate_meteo_data():
-    pass
+                # Merge with point values using date
+                sampled_values = sampled_values.merge(
+                    buffer_values[["valid_time", 'station_code', f'{var}_{buffer}km']],
+                    on=['station_code', "valid_time"],
+                    how="left"
+                )
+        
+            keys_list.append(sampled_values)
+
+        # Combine all DataFrames
+        df_keys = pd.concat(keys_list, ignore_index=True)
+        if not isinstance(df, pd.DataFrame):
+            df = df_keys
+        else:
+            df = df.merge(
+                df_keys,
+                on = ['station_code', "valid_time"],
+                how = 'left'
+            )
+    return df
+
+def load_and_aggregate_meteo_data(area, data_dir, stations_gdf, max_date, buffer_scales = None, crs = 'epsg:4326'):
+    # load meteo data
+    meteo_train = load_meteo_data(area, 'train', data_dir)
+    meteo_eval = load_meteo_data(area, 'eval', data_dir)
+
+    # aggregate data
+    # train
+    train_stations_gdf = stations_gdf[~stations_gdf.eval_only]
+    meteo_train = aggregate_meteo_data(
+        data = meteo_train, 
+        stations_gdf = train_stations_gdf, 
+        max_date = max_date, 
+        buffer_scales = buffer_scales, 
+        crs = crs
+    )
+    # eval
+    meteo_eval = aggregate_meteo_data(
+        data = meteo_eval, 
+        stations_gdf = stations_gdf, 
+        max_date = max_date, 
+        buffer_scales = buffer_scales, 
+        crs = crs
+    )
+    return {'train' : meteo_train, 'eval' : meteo_eval}
 
 def aggregate_soil_data(area, data_dir, stations_gdf, buffer_scales = None):
     """ aggregates the data at specified buffer scale. 
@@ -128,28 +219,46 @@ def main(is_mini = False):
     BBOX = config['bbox']
     CRS = config['crs']
     if is_mini:
-        MINI_DATA = config['mini_data']
+        SEC_DATA = config['mini_data']
     else:
-        MINI_DATA = None
+        SEC_DATA = RAW_DATA
 
     hydro_data = {}
     stations = {}
+    water_flows = {}
+    meteo_data = {}
+    max_dates = {}
     
     # process hydrological data and stations info
     for area in AREAS:
-        stations[area], hydro_data[area] = get_hydro_data(area = area, data_dir = RAW_DATA, mini_data_dir = MINI_DATA)
+        stations[area], hydro_data[area] = get_hydro_data(area = area, data_dir = RAW_DATA, sec_data_dir = SEC_DATA)
 
     # get soil data
     for area in AREAS:
         stations[area] = aggregate_soil_data(area = area, data_dir = RAW_DATA, station_gdf = stations[area])
 
-    # get waterflow data
+    # get altitude data
 
+    # get stations relationship
+
+    # get waterflow data
+    for area in AREAS:
+        water_flows[area] = get_water_flow_data(area, data_dir = SEC_DATA)
+        max_date[area] = water_flows[area]['eval'].ObsDate.max() + pd.Timedelta(7, unit = 'days')
 
     # get meterological data
+    for area in AREAS:
+        meteo_data[area] = load_and_aggregate_meteo_data(
+            area = area, 
+            data_dir = SEC_DATA, 
+            stations_gdf = stations[area], 
+            max_date = max_date[area], 
+            buffer_scales = None, 
+            crs = CRS
+        )
 
-    
-    
+    # merge all data
+        
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
