@@ -116,7 +116,7 @@ def load_station_info(area, meteo_type, data_dir, crs = 'epsg:4326'):
         and updated altitude.
     """
     path = f"{data_dir}{area}/{meteo_type}/waterflow/station_info.csv"
-    df = pd.read_csv(path, sep=",")
+    df = pd.read_csv(path,  quotechar='"')
     df = df.rename(columns={
         "Latitude": "latitude",
         "Longitude": "longitude",
