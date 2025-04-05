@@ -16,7 +16,6 @@ from src.helpers.data_loader import (
     read_altitude_data
 )  
 
-
 def get_stations(area, data_dir, crs = 'epsg:4326'):
     # get train and eval stations
     stations_train = load_station_info(area, 'train', data_dir, crs = crs)
@@ -39,7 +38,7 @@ def aggregate_hydro_data(hydro_data, join_info, stations, crs = 'epsg:4326'):
             predicate = "within",
             lsuffix = lsuffix,
             rsuffix = rsuffix
-        ).rename(columns = {col:f'{col}{rsuffix}', f'index_{rsuffix}': f'id{rsuffix}'})
+        ).rename(columns = {col:f'hydro{rsuffix}', f'index_{rsuffix}': f'id{rsuffix}'})
 
     for geo_scale in hydro_data.keys():
         hydro_data[geo_scale] = hydro_data[geo_scale].iloc[list(stations_[f'id_{geo_scale}'].unique())]
@@ -358,7 +357,7 @@ def main(is_mini = False):
             meteo_buffer = METEO_BUFFER, 
             crs = CRS
         )
-        name = os.path.join(PREPROCESSED_DATA, f'preprocessed_mini_brazil_eval_mini.csv')
+        name = os.path.join(PREPROCESSED_DATA, f'preprocessed_mini_brazil_eval.csv')
         print('Saving data outputs for mini')
         merged.to_csv(name, index = False)
     else:

@@ -1,0 +1,137 @@
+import os
+import tqdm
+from itertools import combinations
+
+import numpy as np
+import pandas as pd
+
+from utils import load_config
+
+def encode_location(lat, lon):
+    lat_rad = np.radians(lat)  # Convert to radians
+    lon_rad = np.radians(lon)
+    
+    lat_sin = np.sin(lat_rad)
+    lat_cos = np.cos(lat_rad)
+    lon_sin = np.sin(lon_rad)
+    lon_cos = np.cos(lon_rad)
+    
+    location_encoding = pd.Series([lat_sin, lat_cos, lon_sin, lon_cos])
+    return location_encoding
+
+def main(is_mini = False):    
+    # load config
+    config = config = load_config()
+    
+    # get constants
+    PREPROCESSED_DATA = config['preprocessed_data']
+    FINAL_DATA = config['final_data']
+
+    BRAZIL_TRAIN = os.path.join(PREPROCESSED_DIR, 'preprocessed_brazil_train.csv')
+    BRAZIL_EVAL = os.path.join(PREPROCESSED_DIR, 'preprocessed_brazil_eval.csv')
+    FRANCE_TRAIN = os.path.join(PREPROCESSED_DIR, 'preprocessed_france_train.csv')
+    FRANCE_EVAL = os.path.join(PREPROCESSED_DIR, 'preprocessed_france_eval.csv')
+    MINI_EVAL = os.path.join(PREPROCESSED_DIR, 'preprocessed_mini_brazil_eval.csv')
+
+    # compile into dict
+    datasets = {
+        'tr_brazil' : BRAZIL_TRAIN,
+        'tr_france' : FRANCE_TRAIN,
+        'ev_brazil' : BRAZIL_EVAL,
+        'ev_france' : FRANCE_EVAL,
+        'ev_mini' : MINI_EVAL
+    }
+
+    # load the data
+    df_ = {}
+    for key, directory in datasets.items():
+        df_[key] = pd.read_csv(directory)
+
+    # remove uncommon features
+    diff_col = set(df_['tr_brazil'].columns).symmetric_difference(set(df_['tr_france'].columns))
+    for key in df_.keys():
+        df_[key] = df_[key].drop(columns = diff_col, errors = 'ignore')
+
+    # drop irrelevant columns
+    COLS_TO_DROP = ['station_name', 'id_region', 'id_sector', 'id_sub_sector', 'id_zone','geometry', 'eval_only']
+    for key in df_.keys():
+        df_[key] = df_[key].drop(columns = COLS_TO_DROP, errors = 'ignore')
+
+    LOCATION = ['longitude', 'latitude']
+    CATEGORICAL = ['station_code', 'river', 'hydro_region', 'hydro_sector', 'hydro_sub_sector', 'hydro_zone']
+    NUM_STATION = ['altitude', 'catchment']
+    NUM_SOIL = ['bdod', 'cfvo', 'clay', 'sand']
+    NUM_METEO = ['tp', 't2m', 'swvl1', 'evap']
+    DISCHARGE = 'discharge'
+    DATE = 'ObsDate'
+
+    # create temporal features
+    for key in df_.keys():
+        # extract df
+        temp = df_[key]
+        # convert to datetime and temporal features
+        temp['ObsDate'] = pd.to_datetime(temp.ObsDate)
+        temp['year'] = temp.ObsDate.dt.year
+        temp['month'] = temp.ObsDate.dt.month
+        temp['week'] = temp.ObsDate.dt.isocalendar().week
+    
+        # compute new features 
+        # season
+        temp['season'] = temp.month.apply(lambda x: (x-1) // 3 + 1) # 1, 2, 3, 4
+    
+        # sinusoidial patterns
+        sigmas = [4, 8]
+        for sigma in sigmas:
+            temp[f'gaussian_{sigma}'] =  np.exp(-(((temp.week + 23) % 52 - 52/2) ** 2) / (2 * sigma ** 2))
+    
+        # convert to categorical
+        temp['year'] = temp.year.astype('category')
+        temp['month'] = temp.month.astype('category')
+        temp['week'] = temp.week.astype('category')
+        temp['season'] = temp.season.astype('category')
+
+    # convert categorical features
+    hydro_scale_combinations = list(combinations(['region', 'sector', 'sub_sector', 'zone'], 2))
+    for key in df_.keys():
+        temp = df_[key]
+        
+        # create hydro feature interaction
+        for comb in hydro_scale_combinations:
+            col = comb[0] + '_' + comb[1]
+            temp[col] = temp.apply(lambda x: str(x[f'hydro_{comb[0]}']) + '_' + str(x[f'hydro_{comb[1]}']), axis = 1).astype('category')
+            
+        # convert other categorical vars to category
+        for col in CATEGORICAL:
+            temp[col] = temp[col].astype('category')
+
+    # location encoding
+    for key in df_.keys():
+        temp = df_[key]
+        temp[['lat_sin', 'lat_cos', 'lon_sin', 'lon_cos']] = temp.apply(lambda x: encode_location(x.latitude, x.longitude), axis = 1)
+
+    # combine data from the different datasets for train and eval.
+    # assign country
+    for key in df_.keys():
+        location = key.split('_')[-1]
+        dataset = key.split('_')[0]
+        if location == 'mini':
+            location = 'brazil'
+            dataset = 'mini'
+        df_[key]['location'] = location
+        if dataset == 'tr':
+            continue
+        df_[key]['dataset'] = dataset
+
+    # combine datasets
+    df_train = pd.concat([df_['tr_brazil'], df_['tr_france']], ignore_index = True)
+    df_eval = pd.concat([df_['ev_brazil'], df_['ev_france'], df_['ev_mini']], ignore_index = True)
+
+    # make final folder
+    os.makedirs(FINAL_DATA, exist_ok = True)
+
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--is-mini', action='store_true', help = 'Preprocess mini data')
+    args = parser.parse_args()
+    main(is_mini = args.is_mini)
