@@ -6,6 +6,7 @@ import numpy as np
 import pandas as pd
 
 from utils import load_config
+from src.helpers import ContiguousGroupKFold
 
 def encode_location(lat, lon):
     lat_rad = np.radians(lat)  # Convert to radians
