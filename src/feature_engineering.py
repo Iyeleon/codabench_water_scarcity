@@ -6,7 +6,7 @@ import numpy as np
 import pandas as pd
 
 from utils import load_config
-from src.helpers import ContiguousGroupKFold
+# from src.helpers import ContiguousGroupKFold
 
 def encode_location(lat, lon):
     lat_rad = np.radians(lat)  # Convert to radians
@@ -25,8 +25,8 @@ def main(is_mini = False):
     config = config = load_config()
     
     # get constants
-    PREPROCESSED_DATA = config['preprocessed_data']
-    FINAL_DATA = config['final_data']
+    PREPROCESSED_DIR = config['preprocessed_data']
+    FINAL_DIR = config['final_data']
 
     BRAZIL_TRAIN = os.path.join(PREPROCESSED_DIR, 'preprocessed_brazil_train.csv')
     BRAZIL_EVAL = os.path.join(PREPROCESSED_DIR, 'preprocessed_brazil_eval.csv')
@@ -128,11 +128,14 @@ def main(is_mini = False):
     df_eval = pd.concat([df_['ev_brazil'], df_['ev_france'], df_['ev_mini']], ignore_index = True)
 
     # make final folder
-    os.makedirs(FINAL_DATA, exist_ok = True)
+    os.makedirs(FINAL_DIR, exist_ok = True)
 
+    # save train and eval
+    train_name = os.path.join(FINAL_DIR, 'train.csv')
+    eval_name = os.path.join(FINAL_DIR, 'eval.csv')
+
+    df_train.to_csv(train_name, index = False)
+    df_eval.to_csv(eval_name, index = False)
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--is-mini', action='store_true', help = 'Preprocess mini data')
-    args = parser.parse_args()
-    main(is_mini = args.is_mini)
+    main()
