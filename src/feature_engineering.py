@@ -127,6 +127,38 @@ def main(is_mini = False):
     df_train = pd.concat([df_['tr_brazil'], df_['tr_france']], ignore_index = True)
     df_eval = pd.concat([df_['ev_brazil'], df_['ev_france'], df_['ev_mini']], ignore_index = True)
 
+    # sort by station and date
+    df_train = df_train.sort_values(['station_code', 'ObsDate'])
+    df_eval = df_eval.sort_values(['station_code', 'ObsDate'])
+
+    # create rolling and lag features
+    for df in [df_train, df_eval]:
+        df['water_flow_lag_1w'] = df.groupby('station_code').discharge.shift(1).bfill()
+        df['water_flow_lag_2w'] = df.groupby('station_code').discharge.shift(2).bfill()
+        df['water_flow_rolling_mean_4w'] = df.groupby('station_code').discharge.shift(1).rolling(4).mean().bfill()
+
+    # create meteo interaction, rolling and lag features
+    for df in [df_train, df_eval]:
+        df['tp_evap_diff'] = df.tp + df.evap
+        for col in df.filter(regex = '|'.join(NUM_METEO)).columns:
+            if 'tp' in col or 'evap' in col :
+                df[f'{col}_rolling_sum_3w'] = df.groupby('station_code')[col].rolling(3).sum().bfill().values
+            elif 't2m' in col or 'swvl1' in col:
+                df[f'{col}_rolling_mean_3w'] = df.groupby('station_code')[col].rolling(3).mean().bfill().values
+            df[f'{col}_lag_1w'] = df.groupby('station_code')[col].shift(1).bfill().values
+
+    # create target vars
+    df_train['water_flow_week_1'] = df_train.discharge
+    df_train['water_flow_week_2'] = df_train.groupby('station_code').discharge.shift(-1)
+    df_train['water_flow_week_3'] = df_train.groupby('station_code').discharge.shift(-2)
+    df_train['water_flow_week_4'] = df_train.groupby('station_code').discharge.shift(-3)
+    df_train = df_train.drop(columns = ['discharge'])
+
+    # keep inference rows
+    missing_values = df_eval["discharge"].isnull()
+    df_eval = df_eval[missing_values]
+    df_eval = df_eval.drop(columns = 'discharge', errors = 'ignore')
+
     # make final folder
     os.makedirs(FINAL_DIR, exist_ok = True)
 

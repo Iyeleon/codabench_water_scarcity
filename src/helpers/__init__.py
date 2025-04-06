@@ -1,1 +1,1 @@
-from continuous_groupkfold import ContiguousGroupKFold
+from .contiguous_groupkfold import ContiguousGroupKFold
