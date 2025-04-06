@@ -131,7 +131,7 @@ def main(is_mini = False):
     df_train = df_train.sort_values(['station_code', 'ObsDate'])
     df_eval = df_eval.sort_values(['station_code', 'ObsDate'])
 
-    # create rolling and lag features
+    # create discharge rolling and lag features
     for df in [df_train, df_eval]:
         df['water_flow_lag_1w'] = df.groupby('station_code').discharge.shift(1).bfill()
         df['water_flow_lag_2w'] = df.groupby('station_code').discharge.shift(2).bfill()
