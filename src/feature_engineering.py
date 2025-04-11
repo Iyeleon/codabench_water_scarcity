@@ -86,10 +86,13 @@ def main(is_mini = False):
             temp[f'gaussian_{sigma}'] =  np.exp(-(((temp.week + 23) % 52 - 52/2) ** 2) / (2 * sigma ** 2))
     
         # convert to categorical
+        # map month to months
+        month_dict = {1:'jan', 2:'feb', 3:'mar', 4:'apr', 5:'may', 6:'jun', 7:'jul', 8:'aug', 9:'sep', 10:'oct', 11:'nov', 12:'dec'}
+        seasons_dict = {1:'winter', 2:'spring', 3:'summer', 4:'autumn'}
         temp['year'] = temp.year.astype('category')
-        temp['month'] = temp.month.astype('category')
-        temp['week'] = temp.week.astype('category')
-        temp['season'] = temp.season.astype('category')
+        temp['month'] = temp.month.map(month_dict).astype('category')
+        temp['week'] = temp.week.apply(lambda x: f'w{x}').astype('category')
+        temp['season'] = temp.season.map(seasons_dict).astype('category')
 
     # convert categorical features
     hydro_scale_combinations = list(combinations(['region', 'sector', 'sub_sector', 'zone'], 2))
@@ -130,12 +133,19 @@ def main(is_mini = False):
     # sort by station and date
     df_train = df_train.sort_values(['station_code', 'ObsDate'])
     df_eval = df_eval.sort_values(['station_code', 'ObsDate'])
+    print(df_eval.shape)
 
     # create discharge rolling and lag features
     for df in [df_train, df_eval]:
         df['water_flow_lag_1w'] = df.groupby('station_code').discharge.shift(1).bfill()
         df['water_flow_lag_2w'] = df.groupby('station_code').discharge.shift(2).bfill()
+        df['water_flow_lag_3w'] = df.groupby('station_code').discharge.shift(3).bfill()
+        df['water_flow_lag_4w'] = df.groupby('station_code').discharge.shift(4).bfill()
         df['water_flow_rolling_mean_4w'] = df.groupby('station_code').discharge.shift(1).rolling(4).mean().bfill()
+        df['water_flow_rolling_std_4w'] = df.groupby('station_code').discharge.shift(1).rolling(4).std().bfill()
+        df['water_flow_rolling_min_4w'] = df.groupby('station_code').discharge.shift(1).rolling(4).min().bfill()
+        df['water_flow_rolling_max_4w'] = df.groupby('station_code').discharge.shift(1).rolling(4).max().bfill()
+        df['water_flow_trend_4w'] = (df.groupby('station_code').discharge.shift(1) - df.groupby('station_code').discharge.shift(4)).bfill()
 
     # create meteo interaction, rolling and lag features
     for df in [df_train, df_eval]:
@@ -158,6 +168,7 @@ def main(is_mini = False):
     missing_values = df_eval["discharge"].isnull()
     df_eval = df_eval[missing_values]
     df_eval = df_eval.drop(columns = 'discharge', errors = 'ignore')
+    print(df_eval.shape)
 
     # make final folder
     os.makedirs(FINAL_DIR, exist_ok = True)
